@@ -187,7 +187,16 @@ function month(root, ym) {
       onclick: () => T.go('diary/' + d),
     }, h('span', i)));
   }
-  root.append(grid, h('p.quiet.center', wrote ? `この月は ${wrote}日 書いた` : 'この月はまだ白紙。日付を押すと書ける'));
+  root.append(grid);
+  // この月に、ほかのページで起きたことも一緒に
+  const S = T.S;
+  const stamps = S.habits.reduce((s, hb) => s + Object.keys(hb.log).filter(d => d.startsWith(ym)).length, 0);
+  const wordsN = S.words.filter(w => w.created.startsWith(ym)).length;
+  const logsN = S.hobbies.reduce((s, hb) => s + hb.logs.filter(l => l.date.startsWith(ym)).length, 0);
+  const out = T.money.monthOut(ym);
+  const facts = [['書いた', `${wrote}日`], stamps && ['ハンコ', `${stamps}回`], wordsN && ['ことば', `${wordsN}個`], out && ['使った', T.yen(out)], logsN && ['趣味の記録', `${logsN}件`]].filter(Boolean).slice(0, 4);
+  if (facts.length > 1) root.append(h('.facts', facts.map(([k, v]) => h('div', h('small', k), h('b', v)))));
+  else root.append(h('p.quiet.center', wrote ? `この月は ${wrote}日 書いた` : 'この月はまだ白紙。日付を押すと書ける'));
   const list = days().filter(d => d.startsWith(ym)).reverse();
   if (list.length) root.append(h('section.block', list.map(d => row(d))));
 }

@@ -1,7 +1,7 @@
 /* 点々 — 共通部分（保存・日付・部品） */
 (() => {
 'use strict';
-const T = window.T = { views: {}, version: '1.0.0' };
+const T = window.T = { views: {}, version: '1.1.0' };
 
 /* ---------- DOM ---------- */
 T.$ = (s, r = document) => r.querySelector(s);
@@ -140,7 +140,7 @@ const defaults = () => ({
       { id: T.uid(), name: '財布', kind: 'wallet', balance: 0 },
       { id: T.uid(), name: '銀行', kind: 'bank', balance: 0 },
     ],
-    tx: [], fixed: [], wishes: [], budget: 0, wage: 0,
+    tx: [], fixed: [], wishes: [], budget: 0,
   },
 });
 function normalize(x) {
@@ -219,12 +219,13 @@ T.download = async (name, blob) => {
   if (isIOS && navigator.canShare) {
     try {
       const file = new File([blob], name, { type: blob.type });
-      if (navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return; }
-    } catch (e) { if (e && e.name === 'AbortError') return; }
+      if (navigator.canShare({ files: [file] })) { await navigator.share({ files: [file] }); return true; }
+    } catch (e) { if (e && e.name === 'AbortError') return false; }
   }
   const a = h('a', { href: URL.createObjectURL(blob), download: name });
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return true;
 };
 T.exportAll = async () => {
   await T.flush();
@@ -236,12 +237,17 @@ T.exportAll = async () => {
   });
   else mem.forEach((v, k) => { blobs[k] = v; });
   const out = JSON.stringify({ app: 'tenten', exported: new Date().toISOString(), state: T.S, blobs });
-  await T.download(`tenten-backup-${T.today()}.json`, new Blob([out], { type: 'application/json' }));
+  const ok = await T.download(`tenten-backup-${T.today()}.json`, new Blob([out], { type: 'application/json' }));
+  if (ok) { T.S.settings.lastBackup = T.today(); await T.flush(); }
+  return ok;
 };
 T.importAll = async file => {
   const data = JSON.parse(await file.text());
   if (!data || data.app !== 'tenten' || !data.state) throw new Error('format');
+  // ロックの番号はバックアップから持ち込まない（いまの端末の設定を使う）
+  const pin = T.S.settings.pin;
   T.S = normalize(data.state);
+  if (pin) T.S.settings.pin = pin; else delete T.S.settings.pin;
   if (db) {
     await tx('blobs', 'readwrite', s => { s.clear(); for (const k in (data.blobs || {})) s.put(data.blobs[k], k); });
   }

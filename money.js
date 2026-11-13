@@ -158,14 +158,26 @@ function editAccount(a) {
 }
 function editPrefs() {
   T.form({
-    title: 'お金の設定',
-    values: { budget: M().budget || '', wage: M().wage || '' },
+    title: '1か月の予算',
+    values: { budget: M().budget || '' },
     fields: [
       { k: 'budget', label: '1か月に使っていい金額', type: 'number', placeholder: '決めないなら空で', hint: '入れると「今月あといくら、1日あたりいくら」が出る' },
-      { k: 'wage', label: '時給', type: 'number', placeholder: '入れないなら空で', hint: '入れると、ほしいものが「バイト何時間ぶん」かわかる' },
     ],
-    onSubmit: v => { M().budget = num(v.budget); M().wage = num(v.wage); T.save(); T.render(); },
+    onSubmit: v => { M().budget = num(v.budget); T.save(); T.render(); },
   });
+}
+/* ほしいものの物差し。今月入ったお金、まだなければ先月の分 */
+function recentIncome() {
+  const m = T.today().slice(0, 7);
+  const a = monthOf(m).inc;
+  if (a) return { amt: a, label: '今月' };
+  const b = monthOf(shiftMonth(m, -1)).inc;
+  return b ? { amt: b, label: '先月' } : null;
+}
+/* 期日が来ていて、まだ記録していない定期 */
+function dueNow() {
+  const t = T.today();
+  return M().fixed.filter(f => f.on !== false).map(f => ({ f, d: nextDue(f, t).d })).filter(x => x.d <= t).sort((a, b) => a.d.localeCompare(b.d));
 }
 
 /* ---------- いま ---------- */
@@ -205,7 +217,7 @@ function now(root) {
     const max = m.cats[0][1];
     box.append(h('.catbars', m.cats.map(([c, v]) => h('.catbar', h('span', c), h('.bar', h('i', { style: { width: Math.max(3, v / max * 100) + '%' } })), h('b', T.yen(v))))));
   } else box.append(h('p.quiet', 'この月の「使った」はまだない'));
-  root.append(box, h('p.center', h('button.btn.small.ghost', { type: 'button', onclick: editPrefs }, '予算と時給を設定する')));
+  root.append(box, h('p.center', h('button.btn.small.ghost', { type: 'button', onclick: editPrefs }, M().budget ? '予算を変える' : '1か月の予算を決める')));
 }
 
 /* ---------- 記録一覧 ---------- */
@@ -291,7 +303,7 @@ function buyWish(w) {
   });
 }
 function wish(root) {
-  const t = T.today(), s = sums();
+  const t = T.today(), s = sums(), inc = recentIncome();
   const open = M().wishes.filter(w => !w.bought).sort((a, b) => a.lv - b.lv || a.created.localeCompare(b.created));
   const got = M().wishes.filter(w => w.bought).sort((a, b) => b.bought.localeCompare(a.bought));
   if (!M().wishes.length) { root.append(T.empty('欲しいと思ったら、買う前にまずここへ。何日か寝かせてもまだ欲しいなら、それは本物。', 'ほしいものを書く', () => editWish())); return; }
@@ -300,7 +312,7 @@ function wish(root) {
     const slept = Math.max(0, T.diffDays(w.created, t));
     const notes = [
       `寝かせて ${slept}日`,
-      w.price && M().wage ? `バイト 約${Math.ceil(w.price / M().wage * 10) / 10}時間ぶん` : null,
+      w.price && inc ? `${inc.label}入ったお金の約${Math.max(1, Math.round(w.price / inc.amt * 100))}%` : null,
       w.price ? (s.free >= w.price ? `いま買える（残り ${T.yen(s.free - w.price)}）` : `あと ${T.yen(w.price - s.free)}`) : null,
     ].filter(Boolean);
     const safe = /^https?:\/\//i.test(w.url || '');
@@ -319,7 +331,7 @@ function wish(root) {
       h('span.mrow-amt', w.price ? T.yen(w.price) : '')))));
 }
 
-T.money = { sums, addWish };
+T.money = { sums, addWish, dueNow, add: () => editTx(), pay: payFixed, monthOut: m => monthOf(m).out };
 T.views.money = {
   render(root, a) {
     const tab = ['log', 'fixed', 'wish'].includes(a[0]) ? a[0] : 'now';

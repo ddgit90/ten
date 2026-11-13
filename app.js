@@ -23,6 +23,69 @@ function applyTheme() {
 }
 mq.addEventListener('change', () => T.S && applyTheme());
 
+/* ---------- ロック（画面を隠すためのもの。暗号化ではない） ---------- */
+const hashPin = pin => {
+  const s = 'tenten:' + pin;
+  let x = 2166136261;
+  for (let r = 0; r < 2000; r++) for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i) + r; x = Math.imul(x, 16777619) >>> 0; }
+  return x.toString(36);
+};
+function pinPad(label, onDone) {
+  let v = '';
+  const dots = h('.pin-dots', [0, 1, 2, 3].map(() => h('i')));
+  const msg = h('p.pin-msg', { 'aria-live': 'polite' }, label);
+  const paint = () => [...dots.children].forEach((d, i) => d.classList.toggle('on', i < v.length));
+  const api = {
+    press(k) {
+      if (k === 'del') v = v.slice(0, -1); else if (v.length < 4) v += k;
+      paint();
+      if (v.length === 4) { const pin = v; setTimeout(() => { v = ''; paint(); onDone(pin, api); }, 150); }
+    },
+    say(text, bad) { msg.textContent = text; if (bad) { dots.classList.remove('shake'); void dots.offsetWidth; dots.classList.add('shake'); } },
+  };
+  api.el = h('.pin', msg, dots, h('.pin-keys', ['1', '2', '3', '4', '5', '6', '7', '8', '9', '', '0', 'del'].map(k => k === '' ? h('span')
+    : h('button', { type: 'button', 'aria-label': k === 'del' ? '1つ消す' : k, onclick: () => api.press(k) }, k === 'del' ? T.icon('left') : k))));
+  return api;
+}
+let locked = false;
+function lock() {
+  if (locked || !T.S.settings.pin) return Promise.resolve();
+  locked = true;
+  T.closeSheets();
+  document.documentElement.classList.add('locked');
+  return new Promise(res => {
+    const pad = pinPad('暗証番号を4桁', (pin, api) => {
+      if (hashPin(pin) !== T.S.settings.pin) { api.say('ちがうみたい。もう一度', true); return; }
+      removeEventListener('keydown', key);
+      wrap.remove(); locked = false;
+      document.documentElement.classList.remove('locked');
+      res();
+    });
+    const key = e => { if (document.querySelector('.sheet-wrap')) return; if (/^\d$/.test(e.key)) pad.press(e.key); else if (e.key === 'Backspace') pad.press('del'); };
+    addEventListener('keydown', key);
+    const wrap = h('#lock', { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'ロック' }, pad.el,
+      h('button.btn.ghost.small', { type: 'button', onclick: async () => {
+        if (!await T.confirm('番号は確かめようがないので、ぜんぶ消してやり直すことになる。バックアップのファイルがあれば、そのあと戻せる。消す？', 'ぜんぶ消す', true)) return;
+        await T.eraseAll(); location.hash = '#/home'; location.reload();
+      } }, '番号を忘れた'));
+    document.body.append(wrap);
+  });
+}
+let hiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) hiddenAt = Date.now();
+  else if (T.S && T.S.settings.pin && hiddenAt && Date.now() - hiddenAt > 180000) lock();
+});
+function setPin(after) {
+  let first = null;
+  const pad = pinPad('新しい番号を4桁', (pin, api) => {
+    if (!first) { first = pin; api.say('確認のため、もう一度'); }
+    else if (pin === first) { T.S.settings.pin = hashPin(pin); T.save(); s.close(); T.toast('ロックをかけた'); after(); }
+    else { first = null; api.say('合わなかった。最初から', true); }
+  });
+  const s = T.sheet({ title: 'ロックをかける', content: h('div', pad.el, h('p.quiet.center', '番号を忘れると、ぜんぶ消してバックアップから戻すことになる。')) });
+}
+
 /* ---------- 設定 ---------- */
 function settings() {
   const body = h('.settings');
@@ -46,9 +109,15 @@ function settings() {
       h('section', h('h3', 'バックアップ'),
         h('p.quiet', '中身はこの端末のブラウザの中だけにある。ブラウザのデータを消すと一緒に消えるので、ときどき書き出しておくと安心。'),
         h('.form-actions.start',
-          h('button.btn', { type: 'button', onclick: async () => { try { await T.exportAll(); } catch { T.toast('書き出せなかった'); } } }, 'ファイルに書き出す'),
+          h('button.btn', { type: 'button', onclick: async () => { try { await T.exportAll(); draw(); } catch { T.toast('書き出せなかった'); } } }, 'ファイルに書き出す'),
           h('button.btn', { type: 'button', onclick: () => file.click() }, 'ファイルから戻す'), file),
+        h('span.quiet', T.S.settings.lastBackup ? `最後に書き出したのは ${T.fmt(T.S.settings.lastBackup, 'ymd')}（${T.diffDays(T.S.settings.lastBackup, T.today())}日前）` : 'まだ一度も書き出していない'),
         usage),
+      h('section', h('h3', 'ロック'),
+        h('p.quiet', T.S.settings.pin ? '開くときと、3分以上はなれて戻ったときに4桁の番号を聞く。' : '開くときに4桁の番号を聞くようにできる。画面を隠すためのもので、中身の暗号化まではしない。'),
+        h('.form-actions.start', T.S.settings.pin
+          ? h('button.btn', { type: 'button', onclick: async () => { if (await T.confirm('ロックを外す？', '外す')) { delete T.S.settings.pin; T.save(); draw(); T.toast('ロックを外した'); } } }, 'ロックを外す')
+          : h('button.btn', { type: 'button', onclick: () => setPin(draw) }, '4桁の番号をかける'))),
       h('section', h('h3', '切り替えのコツ'),
         h('p.quiet', '下のバーを長押ししたまま左右にすべらせると、指を離したページへ飛べる。パソコンなら 1〜6 のキーでも切り替わる。')),
       h('section', h('h3', 'やり直す'),
@@ -118,7 +187,11 @@ function home(root) {
   if (M.tx.length || M.accounts.some(a => a.balance) || M.fixed.length) root.append(h('section.block', h('h2', h('button.h-link', { type: 'button', onclick: () => T.go('money') }, 'お金')),
     h('button.mrow', { type: 'button', onclick: () => T.go('money') },
       h('span.mrow-main', h('b', m.free < 0 ? '足りない見込み' : '自由に使えるお金'), h('small', `今月これから出ていく ${T.yen(m.due)} を引いた額`)),
-      h('span.mrow-amt.big', (m.free < 0 ? '−' : '') + T.yen(Math.abs(m.free))))));
+      h('span.mrow-amt.big', (m.free < 0 ? '−' : '') + T.yen(Math.abs(m.free)))),
+    T.money.dueNow().slice(0, 3).map(({ f, d }) => h('.due',
+      h('span', h('b', f.name), ` ${d === t ? '今日が期日' : T.fmt(d, 'md') + 'の分'}　${T.yen(f.amount)}`),
+      h('button.btn.small', { type: 'button', onclick: () => T.money.pay(f) }, '払った'))),
+    h('.form-actions.start', h('button.btn.small', { type: 'button', onclick: () => T.money.add() }, T.icon('plus'), '使ったお金を記録'))));
 
   // ことば（日替わりで1つ）
   const W = T.S.words;
@@ -141,6 +214,15 @@ function home(root) {
   const pw = T.addDays(t, -7);
   if (D[pw]) past.unshift(['1週間前', pw]);
   if (past.length) root.append(h('section.block', h('h2', 'あの日'), past.slice(0, 4).map(([l, d]) => dv.row(d, l))));
+
+  // たまってきたら、書き出しをひと声だけ（しつこくしない）
+  const st = T.S.settings, since = st.lastBackup ? T.diffDays(st.lastBackup, t) : null;
+  const snoozed = st.backupSnooze && T.diffDays(st.backupSnooze, t) < 14;
+  if (total >= 7 && (since === null || since >= 30) && !snoozed) root.append(h('section.block.nudge',
+    h('p', since === null ? `日記が${total}日ぶんたまった。この端末の中にしかないので、一度ファイルに書き出しておくと安心。` : `最後に書き出してから${since}日たった。そろそろもう一度どう？`),
+    h('.form-actions.start',
+      h('button.btn.small', { type: 'button', onclick: async () => { try { if (await T.exportAll()) T.render(); } catch { T.toast('書き出せなかった'); } } }, 'ファイルに書き出す'),
+      h('button.btn.small.ghost', { type: 'button', onclick: () => { st.backupSnooze = t; T.save(); T.render(); } }, 'あとで'))));
 
   // はじめて開いたとき
   if (!total && !hs.length && !W.length && !T.S.hobbies.length) root.append(h('section.block.guide',
@@ -258,7 +340,7 @@ function buildDock() {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
-    if (document.documentElement.classList.contains('lock')) return;
+    if (locked || document.documentElement.classList.contains('lock')) return;
     const n = Number(e.key);
     if (n >= 1 && n <= T.SECS.length) T.go(T.SECS[n - 1].id);
   });
@@ -271,6 +353,7 @@ function buildDock() {
   await T.load();
   applyTheme();
   buildDock();
+  await lock();
   addEventListener('hashchange', route);
   route();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
